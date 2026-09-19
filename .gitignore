@@ -1,0 +1,13 @@
+build/
+build_*/
+*.o
+*.obj
+CMakeCache.txt
+CMakeFiles/
+*.vst3
+*.clap
+.DS_Store
+
+# Fetched via the git submodule commands in README.md "Building the CLAP target" -
+# not bundled in the source drop, so nothing to ignore-but-keep here.
+libs/
