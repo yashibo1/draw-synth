@@ -229,6 +229,48 @@ int main()
         }
     }
 
+    section ("NoteTimelineBuilder: a steep, fast stroke produces multiple notes, not one");
+    {
+        ScaleQuantizer q;
+        q.setRoot (0);
+        q.setScale (ScaleType::Major);
+        q.setOctaveRange (2); // 15 grid steps
+
+        StrokeModel model;
+        // Simulates a fast near-vertical drag: lots of Y movement packed
+        // into a tiny time window, as mouseDrag would actually record it.
+        model.beginStroke (1.00, 1.0f, 0.8f, 0);
+        model.continueStroke (1.01, 0.8f, 0.8f);
+        model.continueStroke (1.02, 0.6f, 0.8f);
+        model.continueStroke (1.03, 0.4f, 0.8f);
+        model.continueStroke (1.04, 0.2f, 0.8f);
+        model.continueStroke (1.05, 0.0f, 0.8f);
+        model.endStroke();
+
+        // notesPerBeat=1 means the whole gesture above sits inside a single
+        // grid cell - exactly the case that used to collapse to one note.
+        const auto timeline = NoteTimelineBuilder::build (model.getStrokes(), q, 4.0, 1);
+
+        expect (timeline.events.size() > 1,
+                "a steep stroke confined to a fraction of one grid cell still yields more than one note");
+
+        bool strictlyOrderedAndAscendingPitch = true;
+        for (size_t i = 1; i < timeline.events.size(); ++i)
+        {
+            if (timeline.events[i].startBeat <= timeline.events[i - 1].startBeat)
+                strictlyOrderedAndAscendingPitch = false;
+            if (timeline.events[i].midiNote <= timeline.events[i - 1].midiNote)
+                strictlyOrderedAndAscendingPitch = false;
+        }
+        expect (strictlyOrderedAndAscendingPitch, "the fast run's notes are in strictly increasing time and pitch order");
+
+        bool allWithinGrabbedWindow = true;
+        for (const auto& ev : timeline.events)
+            if (ev.startBeat < 0.9 || ev.startBeat > 1.2)
+                allWithinGrabbedWindow = false;
+        expect (allWithinGrabbedWindow, "the fast run's notes stay close to where it was actually drawn, not smeared elsewhere");
+    }
+
     std::printf ("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

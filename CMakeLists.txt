@@ -74,6 +74,7 @@ target_sources(DrawSynth PRIVATE
     Source/UI/CanvasComponent.cpp
     Source/UI/TopControlBar.cpp
     Source/UI/PresetBar.cpp
+    Source/UI/DragExportButton.cpp
     Source/UI/TransportBar.cpp)
 
 target_include_directories(DrawSynth PRIVATE Source)

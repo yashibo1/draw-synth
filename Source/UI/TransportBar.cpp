@@ -4,7 +4,7 @@
 namespace drawsynth
 {
     TransportBar::TransportBar (DrawSynthAudioProcessor& processor, CanvasComponent& canvasToControl)
-        : processorRef (processor), canvasRef (canvasToControl)
+        : processorRef (processor), canvasRef (canvasToControl), dragExportButton (processor)
     {
         auto& apvts = processor.parameters;
 
@@ -31,6 +31,8 @@ namespace drawsynth
 
         exportMidiButton.onClick = [this] { exportMidi(); };
         addAndMakeVisible (exportMidiButton);
+
+        addAndMakeVisible (dragExportButton);
 
         statusLabel.setJustificationType (juce::Justification::centredRight);
         statusLabel.setColour (juce::Label::textColourId, juce::Colours::white.withAlpha (0.6f));
@@ -84,6 +86,8 @@ namespace drawsynth
         undoButton.setBounds (area.removeFromLeft (60));
         area.removeFromLeft (16);
         exportMidiButton.setBounds (area.removeFromLeft (130));
+        area.removeFromLeft (8);
+        dragExportButton.setBounds (area.removeFromLeft (110));
         area.removeFromLeft (12);
         statusLabel.setBounds (area);
     }

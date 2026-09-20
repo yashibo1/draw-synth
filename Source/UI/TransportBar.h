@@ -4,6 +4,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../PluginProcessor.h"
 #include "CanvasComponent.h"
+#include "DragExportButton.h"
 
 namespace drawsynth
 {
@@ -29,6 +30,7 @@ namespace drawsynth
         juce::TextButton clearButton { "Clear" };
         juce::TextButton undoButton { "Undo" };
         juce::TextButton exportMidiButton { "Export MIDI..." };
+        DragExportButton dragExportButton;
         juce::Label statusLabel;
 
         std::unique_ptr<ButtonAttachment> playAttachment, recordAttachment;

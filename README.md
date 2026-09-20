@@ -16,14 +16,31 @@ and CLAP were all built from this exact source in a clean Linux container (JUCE 
 VST3 exports the correct `GetPluginFactory`/`ModuleEntry`/`ModuleExit` symbols and reports itself as
 an Instrument/Synth, and the CLAP binary exports `clap_entry`. The pure music-logic core (scale
 quantization, stroke-to-note-timeline conversion, including the chord/lane behaviour) has an
-independent test suite that passes 29/29 checks with zero JUCE dependency. What hasn't been checked:
+independent test suite that passes 32/32 checks with zero JUCE dependency. What hasn't been checked:
 actually loading the plugin in a DAW and listening to it (no audio device / GUI in the build
 environment), and Windows/macOS builds - see "Building the Windows installer" below for exactly what
 is and isn't verified about `DrawSynth-Setup.exe`.
 
 ## Changelog
 
-**Chords, eraser, presets** (this pass):
+**Fast-stroke note detection, drag-to-DAW export** (this pass):
+- **Fixed: steep/fast strokes losing notes.** `NoteTimelineBuilder` used to sample one Y value per
+  quantize-grid cell, so a fast, near-vertical drag (a lot of pitch change packed into very little
+  time) could have its entire pitch sweep collapse into a single note - exactly the "drawing down
+  does one note instead of multiple" bug. It's rewritten to walk the stroke's own recorded points
+  and detect every scale-step boundary actually crossed between them (via linear interpolation, not
+  grid sampling), so a fast sweep now produces one note per pitch it passes through, each timed at
+  the exact point the line crosses that pitch. Slower, more deliberate drawing still snaps cleanly to
+  the Quantize grid as before - snapping is only skipped for a note when it would otherwise collide
+  with or reorder past its neighbor, which is specifically when a stroke has more pitch content than
+  the grid alone could hold.
+- **Drag straight into your DAW.** A new "Drag into DAW" handle next to Export MIDI - press and drag
+  it out of the plugin window and drop it directly onto FL Studio's (or any other host's) timeline or
+  piano roll, using JUCE's OS-level file drag-and-drop. No save dialog, no download step; it writes
+  the same MIDI a file export would to a temp file behind the scenes and hands that to the OS the
+  moment you start dragging.
+
+**Chords, eraser, presets** (previous pass):
 - **Chords.** Each stroke is now its own independent monophonic "lane" with its own synth voice -
   drawing one line over another no longer erases the one underneath; they sound together.
   `NoteTimelineBuilder` builds each stroke's run of notes independently instead of compositing all
@@ -179,6 +196,8 @@ nothing needs to be redrawn:
 - **Clear** - erases the whole canvas. **Undo** - removes the most recently drawn stroke (single-step;
   see "Deferred" below for the full undo *history* this isn't).
 - **Export MIDI...** - writes the current pattern, one loop cycle, to a `.mid` file.
+- **Drag into DAW** - press and drag this straight onto your DAW's timeline or piano roll to drop the
+  current pattern in as MIDI, with no save dialog and nothing to download first.
 
 There's no per-color timbre picker in this build (chords work regardless - see the Changelog - but
 every simultaneous voice shares the same oscillator/ADSR sound). See "Deferred" below.

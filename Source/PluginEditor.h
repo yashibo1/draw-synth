@@ -9,7 +9,12 @@
 
 namespace drawsynth
 {
-    class DrawSynthAudioProcessorEditor : public juce::AudioProcessorEditor
+    // Also a DragAndDropContainer: this is what lets DragExportButton (in the
+    // transport bar) find an ancestor via findParentDragContainerFor() and
+    // hand a file to the OS's drag-and-drop system, dropping the pattern
+    // straight into the host's timeline or piano roll.
+    class DrawSynthAudioProcessorEditor : public juce::AudioProcessorEditor,
+                                           public juce::DragAndDropContainer
     {
     public:
         explicit DrawSynthAudioProcessorEditor (DrawSynthAudioProcessor&);
@@ -20,6 +25,8 @@ namespace drawsynth
 
     private:
         DrawSynthAudioProcessor& processorRef;
+
+        juce::TooltipWindow tooltipWindow { this };
 
         PresetBar presetBar;
         TopControlBar topControlBar;
