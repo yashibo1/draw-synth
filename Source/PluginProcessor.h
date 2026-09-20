@@ -6,6 +6,7 @@
 #include "Canvas/StrokeModel.h"
 #include "Canvas/NoteTimeline.h"
 #include "Audio/SynthEngine.h"
+#include "State/PresetManager.h"
 
 #include <array>
 #include <atomic>
@@ -59,6 +60,7 @@ namespace drawsynth
         void endStroke();
         void clearCanvas();
         void undoLastStroke();
+        void eraseStroke (int index);
 
         double getLoopLengthBeats() const;
         int getNotesPerBeatValue() const;
@@ -74,6 +76,8 @@ namespace drawsynth
         const ScaleQuantizer& getQuantizerForDisplay() const noexcept { return quantizer; }
 
         bool exportPatternAsMidiFile (const juce::File& destFile);
+
+        PresetManager& getPresetManager() noexcept { return presetManager; }
 
         juce::AudioProcessorValueTreeState parameters;
 
@@ -141,6 +145,7 @@ namespace drawsynth
 
         SynthEngine synthEngine;
         double currentSampleRate = 44100.0;
+        PresetManager presetManager;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DrawSynthAudioProcessor)
     };

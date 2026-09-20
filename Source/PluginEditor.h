@@ -4,6 +4,7 @@
 #include "PluginProcessor.h"
 #include "UI/CanvasComponent.h"
 #include "UI/TopControlBar.h"
+#include "UI/PresetBar.h"
 #include "UI/TransportBar.h"
 
 namespace drawsynth
@@ -20,6 +21,7 @@ namespace drawsynth
     private:
         DrawSynthAudioProcessor& processorRef;
 
+        PresetBar presetBar;
         TopControlBar topControlBar;
         CanvasComponent canvas;
         TransportBar transportBar;

@@ -108,6 +108,14 @@ int main()
         expect (! timeline.events.empty() && ! timeline.events.front().legatoFromPrevious,
                 "first event of a stroke is never legato (nothing to glide from)");
         expect (allLegatoAfterFirst, "every subsequent event within one continuous stroke is legato-linked");
+
+        bool allButLastHaveSuccessor = true;
+        for (size_t i = 0; i + 1 < timeline.events.size(); ++i)
+            if (! timeline.events[i].hasSeamlessSuccessor)
+                allButLastHaveSuccessor = false;
+        expect (allButLastHaveSuccessor, "every event but the last has hasSeamlessSuccessor set, matching the legato chain");
+        expect (! timeline.events.empty() && ! timeline.events.back().hasSeamlessSuccessor,
+                "the last event in a lane has nothing following it, so hasSeamlessSuccessor is false");
     }
 
     section ("NoteTimelineBuilder: two separate strokes with a rest between them");
@@ -192,6 +200,33 @@ int main()
 
         model.clear();
         expect (model.isEmpty(), "clear empties the model");
+    }
+
+    section ("NoteTimelineBuilder: overlapping strokes form a chord instead of overwriting each other");
+    {
+        ScaleQuantizer q;
+        q.setRoot (0);
+        q.setScale (ScaleType::Major);
+        q.setOctaveRange (2);
+
+        StrokeModel model;
+        // A low, long-held note...
+        model.beginStroke (0.0, 0.9f, 0.8f, 0);
+        model.continueStroke (4.0, 0.9f, 0.8f);
+        model.endStroke();
+        // ...and a high note drawn on top of the same time range, as a second stroke.
+        model.beginStroke (0.0, 0.1f, 0.8f, 0);
+        model.continueStroke (4.0, 0.1f, 0.8f);
+        model.endStroke();
+
+        const auto timeline = NoteTimelineBuilder::build (model.getStrokes(), q, 4.0, 1);
+
+        expect (timeline.events.size() == 2, "two overlapping strokes produce two simultaneous events, not one replacing the other");
+        if (timeline.events.size() == 2)
+        {
+            expect (timeline.events[0].laneId != timeline.events[1].laneId, "overlapping notes are on different lanes");
+            expect (timeline.events[0].midiNote != timeline.events[1].midiNote, "the low and high strokes keep their own distinct pitches (a chord)");
+        }
     }
 
     std::printf ("\n%d checks, %d failures\n", checks, failures);

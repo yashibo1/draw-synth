@@ -3,13 +3,14 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../PluginProcessor.h"
+#include "CanvasComponent.h"
 
 namespace drawsynth
 {
     class TransportBar : public juce::Component
     {
     public:
-        explicit TransportBar (DrawSynthAudioProcessor& processor);
+        TransportBar (DrawSynthAudioProcessor& processor, CanvasComponent& canvasToControl);
 
         void resized() override;
         void paint (juce::Graphics&) override;
@@ -20,9 +21,11 @@ namespace drawsynth
         void exportMidi();
 
         DrawSynthAudioProcessor& processorRef;
+        CanvasComponent& canvasRef;
 
         juce::TextButton playButton { "Play" };
         juce::TextButton recordButton { "Record" };
+        juce::TextButton eraserButton { "Eraser" };
         juce::TextButton clearButton { "Clear" };
         juce::TextButton undoButton { "Undo" };
         juce::TextButton exportMidiButton { "Export MIDI..." };

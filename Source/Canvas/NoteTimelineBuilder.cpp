@@ -35,17 +35,104 @@ namespace drawsynth
             return { y, pressure };
         }
 
-        // What (if anything) is sounding at one grid cell, after every stroke
-        // has had a chance to "paint" over it. Newer strokes overwrite older
-        // ones, matching the visual expectation that later ink sits on top.
+        // What (if anything) is sounding at one grid cell, for a *single*
+        // stroke's own cell array. Each stroke gets an independent array -
+        // strokes are never composited against each other, which is exactly
+        // what lets two overlapping strokes coexist as a chord.
         struct CellPaint
         {
             bool hasNote = false;
             int midiNote = -1;
-            int strokeIndex = -1;
-            int colorIndex = 0;
             float velocity01 = 0.8f;
         };
+
+        // Builds one stroke's own run of NoteEvents (its own monophonic
+        // melodic lane) and appends them to the output timeline.
+        void buildLaneForStroke (const Stroke& stroke, int laneId, const ScaleQuantizer& quantizer,
+                                  int numCells, int safeNotesPerBeat, std::vector<NoteEvent>& outEvents)
+        {
+            if (stroke.points.empty())
+                return;
+
+            std::vector<StrokePoint> sorted = stroke.points;
+            std::stable_sort (sorted.begin(), sorted.end(),
+                               [] (const StrokePoint& a, const StrokePoint& b) { return a.timeBeats < b.timeBeats; });
+
+            std::vector<CellPaint> cells (static_cast<size_t> (numCells));
+
+            // A click with no drag: light up just the one cell it falls in.
+            if (sorted.size() == 1)
+            {
+                const double t = sorted.front().timeBeats;
+                int cellIndex = static_cast<int> (std::floor (t * safeNotesPerBeat));
+                cellIndex = ((cellIndex % numCells) + numCells) % numCells;
+
+                CellPaint& cell = cells[static_cast<size_t> (cellIndex)];
+                cell.hasNote = true;
+                cell.midiNote = quantizer.quantizeNormalizedYToMidiNote (sorted.front().normalizedY);
+                cell.velocity01 = sorted.front().pressure;
+            }
+            else
+            {
+                const double minT = sorted.front().timeBeats;
+                const double maxT = sorted.back().timeBeats;
+
+                for (int i = 0; i < numCells; ++i)
+                {
+                    const double cellCentre = (static_cast<double> (i) + 0.5) / safeNotesPerBeat;
+                    if (cellCentre < minT || cellCentre > maxT)
+                        continue;
+
+                    const auto interp = interpolateAt (sorted, cellCentre);
+                    CellPaint& cell = cells[static_cast<size_t> (i)];
+                    cell.hasNote = true;
+                    cell.midiNote = quantizer.quantizeNormalizedYToMidiNote (interp.y);
+                    cell.velocity01 = interp.pressure;
+                }
+            }
+
+            // Run-length encode this one stroke's cells into NoteEvents.
+            // Consecutive same-pitch cells merge into one sustained event; a
+            // pitch change is marked legato (continuous pen gesture -> glide,
+            // no re-attack); a gap always starts fresh.
+            std::vector<NoteEvent> laneEvents;
+            int i = 0;
+            while (i < numCells)
+            {
+                if (! cells[static_cast<size_t> (i)].hasNote)
+                {
+                    ++i;
+                    continue;
+                }
+
+                const int startCell = i;
+                const int note = cells[static_cast<size_t> (i)].midiNote;
+
+                int j = i + 1;
+                while (j < numCells && cells[static_cast<size_t> (j)].hasNote && cells[static_cast<size_t> (j)].midiNote == note)
+                    ++j;
+
+                NoteEvent ev;
+                ev.startBeat = static_cast<double> (startCell) / safeNotesPerBeat;
+                ev.endBeat = static_cast<double> (j) / safeNotesPerBeat;
+                ev.midiNote = note;
+                ev.colorIndex = stroke.colorIndex;
+                ev.laneId = laneId;
+                ev.velocity01 = cells[static_cast<size_t> (startCell)].velocity01;
+                ev.legatoFromPrevious = startCell > 0 && cells[static_cast<size_t> (startCell - 1)].hasNote;
+
+                laneEvents.push_back (ev);
+                i = j;
+            }
+
+            // Now that this lane's own event order is known, mark each event
+            // that is immediately, seamlessly superseded by the next one.
+            for (size_t k = 1; k < laneEvents.size(); ++k)
+                if (laneEvents[k].legatoFromPrevious)
+                    laneEvents[k - 1].hasSeamlessSuccessor = true;
+
+            outEvents.insert (outEvents.end(), laneEvents.begin(), laneEvents.end());
+        }
     }
 
     NoteTimeline NoteTimelineBuilder::build (const std::vector<Stroke>& strokes,
@@ -59,94 +146,15 @@ namespace drawsynth
         const int safeNotesPerBeat = std::max (1, notesPerBeat);
         const int numCells = std::max (1, static_cast<int> (std::lround (timeline.loopLengthBeats * safeNotesPerBeat)));
 
-        std::vector<CellPaint> cells (static_cast<size_t> (numCells));
-
         for (size_t strokeIdx = 0; strokeIdx < strokes.size(); ++strokeIdx)
-        {
-            const Stroke& stroke = strokes[strokeIdx];
-            if (stroke.points.empty())
-                continue;
+            buildLaneForStroke (strokes[strokeIdx], static_cast<int> (strokeIdx), quantizer,
+                                 numCells, safeNotesPerBeat, timeline.events);
 
-            std::vector<StrokePoint> sorted = stroke.points;
-            std::stable_sort (sorted.begin(), sorted.end(),
-                               [] (const StrokePoint& a, const StrokePoint& b) { return a.timeBeats < b.timeBeats; });
-
-            // A click with no drag: light up just the one cell it falls in.
-            if (sorted.size() == 1)
-            {
-                const double t = sorted.front().timeBeats;
-                int cellIndex = static_cast<int> (std::floor (t * safeNotesPerBeat));
-                cellIndex = ((cellIndex % numCells) + numCells) % numCells;
-
-                CellPaint& cell = cells[static_cast<size_t> (cellIndex)];
-                cell.hasNote = true;
-                cell.midiNote = quantizer.quantizeNormalizedYToMidiNote (sorted.front().normalizedY);
-                cell.strokeIndex = static_cast<int> (strokeIdx);
-                cell.colorIndex = stroke.colorIndex;
-                cell.velocity01 = sorted.front().pressure;
-                continue;
-            }
-
-            const double minT = sorted.front().timeBeats;
-            const double maxT = sorted.back().timeBeats;
-
-            for (int i = 0; i < numCells; ++i)
-            {
-                const double cellCentre = (static_cast<double> (i) + 0.5) / safeNotesPerBeat;
-                if (cellCentre < minT || cellCentre > maxT)
-                    continue;
-
-                const auto interp = interpolateAt (sorted, cellCentre);
-                CellPaint& cell = cells[static_cast<size_t> (i)];
-                cell.hasNote = true;
-                cell.midiNote = quantizer.quantizeNormalizedYToMidiNote (interp.y);
-                cell.strokeIndex = static_cast<int> (strokeIdx);
-                cell.colorIndex = stroke.colorIndex;
-                cell.velocity01 = interp.pressure;
-            }
-        }
-
-        // Run-length encode the composited grid into NoteEvents. Consecutive
-        // cells with the same pitch AND the same source stroke merge into one
-        // sustained event; a pitch change with the same source stroke is
-        // marked legato (continuous pen gesture -> glide, no re-attack); a
-        // change of source stroke (or a gap) always starts fresh.
-        int i = 0;
-        while (i < numCells)
-        {
-            if (! cells[static_cast<size_t> (i)].hasNote)
-            {
-                ++i;
-                continue;
-            }
-
-            const int startCell = i;
-            const CellPaint& first = cells[static_cast<size_t> (i)];
-            const int note = first.midiNote;
-            const int strokeIdx = first.strokeIndex;
-
-            int j = i + 1;
-            while (j < numCells)
-            {
-                const CellPaint& c = cells[static_cast<size_t> (j)];
-                if (! c.hasNote || c.midiNote != note || c.strokeIndex != strokeIdx)
-                    break;
-                ++j;
-            }
-
-            NoteEvent ev;
-            ev.startBeat = static_cast<double> (startCell) / safeNotesPerBeat;
-            ev.endBeat = static_cast<double> (j) / safeNotesPerBeat;
-            ev.midiNote = note;
-            ev.colorIndex = first.colorIndex;
-            ev.velocity01 = first.velocity01;
-            ev.legatoFromPrevious = startCell > 0
-                                     && cells[static_cast<size_t> (startCell - 1)].hasNote
-                                     && cells[static_cast<size_t> (startCell - 1)].strokeIndex == strokeIdx;
-
-            timeline.events.push_back (ev);
-            i = j;
-        }
+        // Lanes were appended one stroke at a time, so the combined list
+        // needs re-sorting into overall chronological order. A stable sort
+        // keeps each lane's own events in their original relative order.
+        std::stable_sort (timeline.events.begin(), timeline.events.end(),
+                           [] (const NoteEvent& a, const NoteEvent& b) { return a.startBeat < b.startBeat; });
 
         return timeline;
     }

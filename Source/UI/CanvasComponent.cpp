@@ -48,20 +48,78 @@ namespace drawsynth
         return (p > 0.0f && p < 1.0f) ? p : 0.8f;
     }
 
+    void CanvasComponent::setEraseMode (bool shouldErase)
+    {
+        eraseMode = shouldErase;
+        setMouseCursor (eraseMode ? juce::MouseCursor::CrosshairCursor : juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+
+    void CanvasComponent::eraseAt (juce::Point<int> pixelPos)
+    {
+        const double loopLength = processorRef.getLoopLengthBeats();
+        const auto& strokes = processorRef.getStrokeModel().getStrokes();
+        constexpr float eraseRadiusPixels = 14.0f;
+
+        // Search newest-drawn-first, matching the visual expectation that
+        // the topmost (most recently drawn) line is the one erased.
+        for (int i = static_cast<int> (strokes.size()) - 1; i >= 0; --i)
+        {
+            const auto& stroke = strokes[static_cast<size_t> (i)];
+            bool hit = false;
+
+            for (const auto& point : stroke.points)
+            {
+                const float px = beatsToX (point.timeBeats, loopLength, static_cast<float> (getWidth()));
+                const float py = point.normalizedY * static_cast<float> (getHeight());
+                const float dx = px - static_cast<float> (pixelPos.x);
+                const float dy = py - static_cast<float> (pixelPos.y);
+
+                if (std::sqrt (dx * dx + dy * dy) <= eraseRadiusPixels)
+                {
+                    hit = true;
+                    break;
+                }
+            }
+
+            if (hit)
+            {
+                processorRef.eraseStroke (i);
+                repaint();
+                return; // one stroke per call; a drag naturally erases more as it crosses them
+            }
+        }
+    }
+
     void CanvasComponent::mouseDown (const juce::MouseEvent& e)
     {
+        if (eraseMode)
+        {
+            eraseAt (e.getPosition());
+            return;
+        }
+
         processorRef.beginStroke (xToBeats (e.x), yToNormalized (e.y), pressureFromEvent (e));
         repaint();
     }
 
     void CanvasComponent::mouseDrag (const juce::MouseEvent& e)
     {
+        if (eraseMode)
+        {
+            eraseAt (e.getPosition());
+            return;
+        }
+
         processorRef.continueStroke (xToBeats (e.x), yToNormalized (e.y), pressureFromEvent (e));
         repaint();
     }
 
     void CanvasComponent::mouseUp (const juce::MouseEvent&)
     {
+        if (eraseMode)
+            return;
+
         processorRef.endStroke();
         repaint();
     }
@@ -160,7 +218,13 @@ namespace drawsynth
             g.drawLine (x, 0.0f, x, bounds.getHeight(), 2.0f);
         }
 
-        if (processorRef.getStrokeModel().getStrokes().empty())
+        if (eraseMode)
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.35f));
+            g.setFont (juce::Font (juce::FontOptions (16.0f)));
+            g.drawText ("Eraser: click or drag over a line to delete it", getLocalBounds(), juce::Justification::centred);
+        }
+        else if (processorRef.getStrokeModel().getStrokes().empty())
         {
             g.setColour (juce::Colours::white.withAlpha (0.25f));
             g.setFont (juce::Font (juce::FontOptions (16.0f)));

@@ -10,7 +10,8 @@ namespace drawsynth
 {
     DrawSynthAudioProcessor::DrawSynthAudioProcessor()
         : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-          parameters (*this, nullptr, juce::Identifier ("PARAMETERS"), createParameterLayout())
+          parameters (*this, nullptr, juce::Identifier ("PARAMETERS"), createParameterLayout()),
+          presetManager (*this)
     {
         rootParam         = parameters.getRawParameterValue (ParamIDs::root);
         scaleParam        = parameters.getRawParameterValue (ParamIDs::scale);
@@ -110,14 +111,14 @@ namespace drawsynth
         lastKnownBpm.store (bpm, std::memory_order_relaxed);
 
         // 2. Push current synth parameters into the engine (cheap float copies).
-        synthEngine.getVoice().setOscillatorType (static_cast<OscType> (juce::roundToInt ((float) *oscTypeParam)));
+        synthEngine.setOscillatorType (static_cast<OscType> (juce::roundToInt ((float) *oscTypeParam)));
 
         juce::ADSR::Parameters adsrParams;
         adsrParams.attack = *attackParam;
         adsrParams.decay = *decayParam;
         adsrParams.sustain = *sustainParam;
         adsrParams.release = *releaseParam;
-        synthEngine.getVoice().setAdsrParameters (adsrParams);
+        synthEngine.setAdsrParameters (adsrParams);
 
         const double beatsPerSample = (bpm / 60.0) / currentSampleRate;
         const bool recordingArmed = *recordingParam >= 0.5f;
@@ -173,7 +174,7 @@ namespace drawsynth
             }
 
             // Let any release tail finish naturally instead of hard-cutting.
-            synthEngine.getVoice().renderAdding (buffer, 0, numSamples);
+            synthEngine.renderTailOnly (buffer, 0, numSamples);
         }
 
         uiPlayheadBeats.store (phaseBeats, std::memory_order_relaxed);
@@ -278,6 +279,15 @@ namespace drawsynth
     void DrawSynthAudioProcessor::undoLastStroke()
     {
         strokeModel.undoLastStroke();
+        timelineDirty.store (true);
+    }
+
+    void DrawSynthAudioProcessor::eraseStroke (int index)
+    {
+        if (index < 0)
+            return;
+
+        strokeModel.eraseStroke (static_cast<size_t> (index));
         timelineDirty.store (true);
     }
 

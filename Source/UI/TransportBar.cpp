@@ -3,7 +3,8 @@
 
 namespace drawsynth
 {
-    TransportBar::TransportBar (DrawSynthAudioProcessor& processor) : processorRef (processor)
+    TransportBar::TransportBar (DrawSynthAudioProcessor& processor, CanvasComponent& canvasToControl)
+        : processorRef (processor), canvasRef (canvasToControl)
     {
         auto& apvts = processor.parameters;
 
@@ -16,6 +17,11 @@ namespace drawsynth
         recordButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd9534f));
         addAndMakeVisible (recordButton);
         recordAttachment = std::make_unique<ButtonAttachment> (apvts, ParamIDs::recording, recordButton);
+
+        eraserButton.setClickingTogglesState (true);
+        eraserButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffe0a63a));
+        eraserButton.onClick = [this] { canvasRef.setEraseMode (eraserButton.getToggleState()); };
+        addAndMakeVisible (eraserButton);
 
         clearButton.onClick = [this] { processorRef.clearCanvas(); };
         addAndMakeVisible (clearButton);
@@ -71,6 +77,8 @@ namespace drawsynth
         area.removeFromLeft (8);
         recordButton.setBounds (area.removeFromLeft (80));
         area.removeFromLeft (16);
+        eraserButton.setBounds (area.removeFromLeft (70));
+        area.removeFromLeft (8);
         clearButton.setBounds (area.removeFromLeft (60));
         area.removeFromLeft (8);
         undoButton.setBounds (area.removeFromLeft (60));

@@ -37,6 +37,7 @@ namespace drawsynth
 
         void clear();
         void undoLastStroke();
+        void eraseStroke (size_t index); // removes one specific stroke (the eraser tool); out-of-range index is a no-op
 
         const std::vector<Stroke>& getStrokes() const noexcept { return strokes; }
         bool isEmpty() const noexcept { return strokes.empty(); }

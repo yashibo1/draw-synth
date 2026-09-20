@@ -6,24 +6,101 @@ namespace drawsynth
 {
     void SynthEngine::prepare (double sampleRate)
     {
-        voice.prepare (sampleRate);
+        for (auto& slot : voiceSlots)
+            slot.voice.prepare (sampleRate);
     }
 
     void SynthEngine::reset()
     {
-        voice.reset();
-        lastSoundingNote = -1;
+        for (auto& slot : voiceSlots)
+        {
+            slot.voice.reset();
+            slot.assignedLaneId = -1;
+            slot.currentMidiNote = -1;
+            slot.currentColorIndex = 0;
+        }
+        laneToVoiceSlot.clear();
+        triggerCounter = 0;
+    }
+
+    void SynthEngine::setOscillatorType (OscType type)
+    {
+        for (auto& slot : voiceSlots)
+            slot.voice.setOscillatorType (type);
+    }
+
+    void SynthEngine::setAdsrParameters (const juce::ADSR::Parameters& params)
+    {
+        for (auto& slot : voiceSlots)
+            slot.voice.setAdsrParameters (params);
     }
 
     void SynthEngine::allNotesOff (juce::MidiBuffer& midiOut, int atSample)
     {
-        if (lastSoundingNote != -1)
+        const int clampedSample = std::max (0, atSample);
+
+        for (auto& slot : voiceSlots)
         {
-            voice.stopNote();
-            const int channel = juce::jlimit (1, 16, lastSoundingColor + 1);
-            midiOut.addEvent (juce::MidiMessage::noteOff (channel, lastSoundingNote, 0.0f), std::max (0, atSample));
-            lastSoundingNote = -1;
+            if (slot.currentMidiNote != -1)
+            {
+                slot.voice.stopNote();
+                const int channel = juce::jlimit (1, 16, slot.currentColorIndex + 1);
+                midiOut.addEvent (juce::MidiMessage::noteOff (channel, slot.currentMidiNote, 0.0f), clampedSample);
+                slot.currentMidiNote = -1;
+            }
+            slot.assignedLaneId = -1;
         }
+
+        laneToVoiceSlot.clear();
+    }
+
+    void SynthEngine::renderTailOnly (juce::AudioBuffer<float>& buffer, int startSample, int numSamples)
+    {
+        for (auto& slot : voiceSlots)
+            slot.voice.renderAdding (buffer, startSample, numSamples);
+    }
+
+    int SynthEngine::findOrAllocateVoiceForLane (int laneId, bool preferExistingLaneVoice)
+    {
+        if (preferExistingLaneVoice)
+        {
+            auto it = laneToVoiceSlot.find (laneId);
+            if (it != laneToVoiceSlot.end())
+                return it->second;
+            // No existing voice for this lane (shouldn't normally happen for
+            // a legato event, but fall through to a fresh allocation rather
+            // than dropping the note if it ever does).
+        }
+
+        for (int i = 0; i < kMaxVoices; ++i)
+        {
+            if (voiceSlots[static_cast<size_t> (i)].assignedLaneId == -1)
+            {
+                voiceSlots[static_cast<size_t> (i)].assignedLaneId = laneId;
+                laneToVoiceSlot[laneId] = i;
+                return i;
+            }
+        }
+
+        // Every voice is busy: steal the least-recently-triggered one.
+        int stealIndex = 0;
+        uint64_t oldestOrder = voiceSlots[0].triggerOrder;
+        for (int i = 1; i < kMaxVoices; ++i)
+        {
+            if (voiceSlots[static_cast<size_t> (i)].triggerOrder < oldestOrder)
+            {
+                oldestOrder = voiceSlots[static_cast<size_t> (i)].triggerOrder;
+                stealIndex = i;
+            }
+        }
+
+        const int previousLane = voiceSlots[static_cast<size_t> (stealIndex)].assignedLaneId;
+        if (previousLane != -1)
+            laneToVoiceSlot.erase (previousLane);
+
+        voiceSlots[static_cast<size_t> (stealIndex)].assignedLaneId = laneId;
+        laneToVoiceSlot[laneId] = stealIndex;
+        return stealIndex;
     }
 
     void SynthEngine::renderBlock (const NoteTimeline& timeline,
@@ -39,9 +116,7 @@ namespace drawsynth
         const double loopLen = timeline.loopLengthBeats;
         if (loopLen <= 0.0 || beatsPerSample <= 0.0)
         {
-            // Nothing sensible to schedule; still render whatever the voice
-            // is currently doing (e.g. a release tail) so nothing clicks.
-            voice.renderAdding (audioOut, 0, numSamples);
+            renderTailOnly (audioOut, 0, numSamples);
             return;
         }
 
@@ -51,9 +126,6 @@ namespace drawsynth
 
         int destOffset = 0;
         int samplesLeft = numSamples;
-
-        // Guard against pathological inputs (e.g. a huge offline-render block
-        // against a tiny loop) looping forever.
         int safetyIterations = numSamples + 4;
 
         while (samplesLeft > 0 && safetyIterations-- > 0)
@@ -74,9 +146,8 @@ namespace drawsynth
 
             if (phase >= loopLen - 1.0e-6)
             {
-                // Reached the loop boundary: nothing in a NoteTimeline is
-                // ever meant to sustain across the seam, so force silence
-                // here rather than risk a hung note.
+                // Nothing in a NoteTimeline is ever meant to sustain across
+                // the loop seam - force everything off here.
                 allNotesOff (midiOut, destOffset);
                 phase = 0.0;
             }
@@ -92,27 +163,18 @@ namespace drawsynth
     {
         std::vector<Action> actions;
 
-        for (size_t i = 0; i < timeline.events.size(); ++i)
+        for (const auto& ev : timeline.events)
         {
-            const auto& ev = timeline.events[i];
-
             if (ev.startBeat >= segStartBeat && ev.startBeat < segEndBeat)
-                actions.push_back ({ ev.startBeat, true, ev.midiNote, ev.colorIndex, ev.velocity01, ev.legatoFromPrevious });
+                actions.push_back ({ ev.startBeat, true, ev.midiNote, ev.colorIndex, ev.laneId, ev.velocity01, ev.legatoFromPrevious });
 
-            // Skip the "end" action when the very next event continues this
-            // one seamlessly (legato) - its own "start" action supersedes
-            // this note without needing an explicit off first.
-            const bool hasSeamlessSuccessor = (i + 1 < timeline.events.size())
-                                               && timeline.events[i + 1].legatoFromPrevious
-                                               && std::abs (timeline.events[i + 1].startBeat - ev.endBeat) < 1.0e-9;
-
-            if (! hasSeamlessSuccessor && ev.endBeat > segStartBeat && ev.endBeat <= segEndBeat)
-                actions.push_back ({ ev.endBeat, false, ev.midiNote, ev.colorIndex, ev.velocity01, false });
+            if (! ev.hasSeamlessSuccessor && ev.endBeat > segStartBeat && ev.endBeat <= segEndBeat)
+                actions.push_back ({ ev.endBeat, false, ev.midiNote, ev.colorIndex, ev.laneId, ev.velocity01, false });
         }
 
-        std::sort (actions.begin(), actions.end(), [] (const Action& a, const Action& b)
+        std::stable_sort (actions.begin(), actions.end(), [] (const Action& a, const Action& b)
         {
-            if (std::abs (a.beat - b.beat) > 1.0e-9)
+            if (a.beat != b.beat)
                 return a.beat < b.beat;
             return (! a.isStart) && b.isStart; // process "end" before "start" at the same instant
         });
@@ -127,7 +189,8 @@ namespace drawsynth
             const int subLen = actionSample - cursor;
             if (subLen > 0)
             {
-                voice.renderAdding (audioOut, destOffset + cursor, subLen);
+                for (auto& slot : voiceSlots)
+                    slot.voice.renderAdding (audioOut, destOffset + cursor, subLen);
                 cursor += subLen;
             }
 
@@ -135,33 +198,47 @@ namespace drawsynth
 
             if (action.isStart)
             {
-                voice.startNote (action.midiNote, action.velocity01, action.legato);
+                const int slotIndex = findOrAllocateVoiceForLane (action.laneId, action.legato);
+                auto& slot = voiceSlots[static_cast<size_t> (slotIndex)];
 
-                if (lastSoundingNote != -1 && lastSoundingNote != action.midiNote)
+                const bool trueLegato = action.legato && slot.currentMidiNote != -1;
+                slot.voice.startNote (action.midiNote, action.velocity01, trueLegato);
+                slot.triggerOrder = ++triggerCounter;
+                slot.currentColorIndex = action.colorIndex;
+
+                if (trueLegato && slot.currentMidiNote != action.midiNote)
                 {
-                    // Same-instant handover, new note-on emitted first: a
-                    // mono-legato-aware receiver reads this as a glide;
-                    // anything else just sees a clean, gapless handover.
+                    // Same-instant handover on the same voice, new note-on
+                    // emitted first: a mono-legato-aware receiver reads this
+                    // as a glide; anything else just sees a gapless handover.
                     midiOut.addEvent (juce::MidiMessage::noteOn (channel, action.midiNote, action.velocity01), destOffset + cursor);
-                    midiOut.addEvent (juce::MidiMessage::noteOff (channel, lastSoundingNote, 0.0f), destOffset + cursor);
+                    midiOut.addEvent (juce::MidiMessage::noteOff (channel, slot.currentMidiNote, 0.0f), destOffset + cursor);
                 }
                 else
                 {
                     midiOut.addEvent (juce::MidiMessage::noteOn (channel, action.midiNote, action.velocity01), destOffset + cursor);
                 }
 
-                lastSoundingNote = action.midiNote;
-                lastSoundingColor = action.colorIndex;
+                slot.currentMidiNote = action.midiNote;
             }
             else
             {
-                voice.stopNote();
-                midiOut.addEvent (juce::MidiMessage::noteOff (channel, action.midiNote, 0.0f), destOffset + cursor);
-                lastSoundingNote = -1;
+                auto it = laneToVoiceSlot.find (action.laneId);
+                if (it != laneToVoiceSlot.end())
+                {
+                    auto& slot = voiceSlots[static_cast<size_t> (it->second)];
+                    slot.voice.stopNote();
+                    if (slot.currentMidiNote != -1)
+                        midiOut.addEvent (juce::MidiMessage::noteOff (channel, slot.currentMidiNote, 0.0f), destOffset + cursor);
+                    slot.currentMidiNote = -1;
+                    slot.assignedLaneId = -1;
+                    laneToVoiceSlot.erase (it);
+                }
             }
         }
 
         if (cursor < segLengthSamples)
-            voice.renderAdding (audioOut, destOffset + cursor, segLengthSamples - cursor);
+            for (auto& slot : voiceSlots)
+                slot.voice.renderAdding (audioOut, destOffset + cursor, segLengthSamples - cursor);
     }
 }

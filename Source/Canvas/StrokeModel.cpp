@@ -46,4 +46,12 @@ namespace drawsynth
 
         activeStrokeIndex = -1;
     }
+
+    void StrokeModel::eraseStroke (size_t index)
+    {
+        if (index < strokes.size())
+            strokes.erase (strokes.begin() + static_cast<std::ptrdiff_t> (index));
+
+        activeStrokeIndex = -1;
+    }
 }

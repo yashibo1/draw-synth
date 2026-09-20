@@ -2,21 +2,50 @@
 
 A VST3/CLAP/Standalone instrument built with JUCE: you draw on a canvas and the drawing becomes music.
 X = time (one loop, synced to host tempo), Y = pitch (quantized to a key/scale). Draw a continuous
-line for a legato melodic line; lift the pen and draw again for a new phrase.
+line for a legato melodic line; draw another line above or below it for a chord; lift the pen and
+draw again for a new phrase.
 
-This is the v1 build: drawing canvas, key/scale quantization (major/minor + all seven modes as a
-stretch), tempo sync, one voice, a built-in 3-oscillator ADSR synth, MIDI export, and MIDI-out
-passthrough. Multi-voice colors, WAV export, and a full undo history are deferred (see the bottom
-of this file) — the data model already has the seams for them, described below.
+This build: drawing canvas, key/scale quantization (major/minor + all seven modes as a stretch),
+tempo sync, chords (each stroke is its own independently-voiced monophonic lane), a built-in
+3-oscillator ADSR synth with a preset browser, an eraser, MIDI export, and MIDI-out passthrough.
+Distinct timbres per color, WAV export, and a full undo history are deferred (see the bottom of this
+file) — the data model already has the seams for the first of those, described below.
 
 **Build status**: every claim in this file about compiling was actually checked. VST3, Standalone,
 and CLAP were all built from this exact source in a clean Linux container (JUCE 8.0.7, GCC 13); the
 VST3 exports the correct `GetPluginFactory`/`ModuleEntry`/`ModuleExit` symbols and reports itself as
 an Instrument/Synth, and the CLAP binary exports `clap_entry`. The pure music-logic core (scale
-quantization, stroke-to-note-timeline conversion) has an independent test suite that passes 24/24
-checks with zero JUCE dependency. What hasn't been checked: actually loading the plugin in a DAW and
-listening to it (no audio device / GUI in the build environment), and Windows/macOS builds - see
-"Building the Windows installer" below for exactly what is and isn't verified about `DrawSynth-Setup.exe`.
+quantization, stroke-to-note-timeline conversion, including the chord/lane behaviour) has an
+independent test suite that passes 29/29 checks with zero JUCE dependency. What hasn't been checked:
+actually loading the plugin in a DAW and listening to it (no audio device / GUI in the build
+environment), and Windows/macOS builds - see "Building the Windows installer" below for exactly what
+is and isn't verified about `DrawSynth-Setup.exe`.
+
+## Changelog
+
+**Chords, eraser, presets** (this pass):
+- **Chords.** Each stroke is now its own independent monophonic "lane" with its own synth voice -
+  drawing one line over another no longer erases the one underneath; they sound together.
+  `NoteTimelineBuilder` builds each stroke's run of notes independently instead of compositing all
+  strokes onto one shared grid, and `SynthEngine` grew a small 16-voice pool (least-recently-triggered
+  voice stealing when more than 16 lanes are sounding at once - drawing that many overlapping lines by
+  hand is already an extreme edge case). Chords sum voices directly with no automatic gain
+  compensation, so a dense chord may need the **Level** knob turned down.
+- **Eraser.** A new toggle in the transport bar switches the canvas into erase mode: click or drag
+  over a line to delete just that stroke. This is *whole-stroke* erase, not a sub-segment eraser that
+  splits a line where you erase part of it - see "Deferred".
+- **Presets.** A dropdown at the top saves/loads/deletes named presets of the sound + grid settings
+  (key, scale, octave range/shift, quantize, loop length, oscillator, ADSR, level). Presets do **not**
+  store the drawn pattern - a preset here is an "instrument setting" the same way it is in any other
+  synth; the drawing itself is closer to a song than a patch. Ships with four factory presets (Init,
+  Soft Pad, Pluck Lead, Deep Bass) seeded into `%APPDATA%\DrawSynth\Presets` (or the platform
+  equivalent) the first time it runs. This is DrawSynth's own preset format, not an importer for
+  another plugin's preset files: Serum's presets encode wavetables, filters, and a modulation matrix
+  that have no meaningful equivalent in DrawSynth's simple oscillator+ADSR voice, so there'd be
+  nothing sensible to map that data onto even if the file could be parsed.
+
+**Initial pass**: drawing canvas, key/scale quantization, tempo sync, one voice, internal synth, MIDI
+export, MIDI-out, Windows installer packaging.
 
 ## Building
 
@@ -115,6 +144,10 @@ g++ -std=c++17 -o logic_test tests/logic_test.cpp \
 
 ## Controls
 
+**Preset bar** (very top) - a dropdown of saved sounds; pick one to load it instantly. **Save** shows
+an inline name field (Enter to confirm, Esc to cancel); **Delete** removes the selected preset. See
+the Changelog above for exactly what a preset does and doesn't capture.
+
 **Grid shape** (top-left row) - changing any of these re-quantizes the existing drawing on the spot,
 nothing needs to be redrawn:
 - **Key** - the 12 chromatic roots.
@@ -141,11 +174,14 @@ nothing needs to be redrawn:
   of your project.
 - **Record** - while armed and playing, incoming MIDI notes (from your DAW or a MIDI keyboard) are
   captured onto the canvas as new strokes, using the same code path as drawing with the mouse.
+- **Eraser** - toggles erase mode: click or drag over a line on the canvas to delete that stroke
+  (the whole stroke, not just the part under the cursor). Toggle it off to go back to drawing.
 - **Clear** - erases the whole canvas. **Undo** - removes the most recently drawn stroke (single-step;
   see "Deferred" below for the full undo *history* this isn't).
 - **Export MIDI...** - writes the current pattern, one loop cycle, to a `.mid` file.
 
-There's no color/voice picker in this build - see "Deferred" below.
+There's no per-color timbre picker in this build (chords work regardless - see the Changelog - but
+every simultaneous voice shares the same oscillator/ADSR sound). See "Deferred" below.
 
 ## How drawing becomes music
 
@@ -155,24 +191,33 @@ There's no color/voice picker in this build - see "Deferred" below.
 2. **`ScaleQuantizer`** is the only thing that knows how a Y position maps to a MIDI note, given the
    current key/scale/octave window. Its inverse is used to place recorded MIDI notes back onto the
    canvas.
-3. **`NoteTimelineBuilder`** combines the two: it lays a time grid over the loop (resolution = the
-   Quantize setting), samples each stroke's interpolated Y at each grid cell, quantizes it, and
-   run-length-encodes consecutive same-pitch cells into a `NoteEvent`. A pitch change with no gap
-   inside one continuous stroke is flagged `legatoFromPrevious` instead of getting a hard cut - that's
-   the "continuous line = legato glide" behaviour. This whole rebuild re-runs from scratch on every
-   edit or grid-setting change, which is what makes quantization retroactive: strokes are never
-   touched, only re-read.
-4. **`NoteTimeline`** (the output of step 3) is the single interchange format. `SynthEngine` consumes
-   it directly each audio block, splitting the block at every note boundary for sample-accurate
-   timing, and emits the same information as outgoing MIDI in lockstep. `MidiExporter` consumes the
-   *same* structure independently to write a `.mid` file. Neither has to know anything about strokes,
-   pixels, or canvases - which is also exactly the seam a future offline WAV render would reuse (call
-   `SynthEngine::renderBlock` in a loop against a timeline instead of live audio callbacks).
+3. **`NoteTimelineBuilder`** builds each stroke into its own independent "lane": it lays a time grid
+   over the loop (resolution = the Quantize setting), samples *that stroke's* interpolated Y at each
+   grid cell, quantizes it, and run-length-encodes consecutive same-pitch cells into a `NoteEvent`
+   tagged with that stroke's lane ID. A pitch change with no gap inside one continuous stroke is
+   flagged `legatoFromPrevious` instead of getting a hard cut - that's the "continuous line = legato
+   glide" behaviour. Because every stroke is built independently rather than composited onto one
+   shared grid, two overlapping strokes never erase each other - they just both end up in the final
+   timeline, sounding together as a chord. This whole rebuild re-runs from scratch on every edit or
+   grid-setting change, which is what makes quantization retroactive: strokes are never touched, only
+   re-read.
+4. **`NoteTimeline`** (the output of step 3) is the single interchange format - a flat list of
+   `NoteEvent`s, each tagged with the lane it came from, sorted by start time but free to overlap
+   across lanes. `SynthEngine` consumes it directly each audio block, splitting the block at every
+   note boundary for sample-accurate timing, and emits the same information as outgoing MIDI in
+   lockstep. `MidiExporter` consumes the *same* structure independently to write a `.mid` file.
+   Neither has to know anything about strokes, pixels, or canvases - which is also exactly the seam a
+   future offline WAV render would reuse (call `SynthEngine::renderBlock` in a loop against a timeline
+   instead of live audio callbacks).
 
-Legato is implemented as a true monophonic glide: `SynthVoice` skips the envelope's attack stage and
-smoothly ramps oscillator frequency (over a fixed ~50ms) when a note is legato-linked to the one
-before it, rather than hard-retriggering. For MIDI-out and file export, this is represented using the
-standard mono-legato convention (new note-on emitted just before the old note-off), which
+Legato is implemented as a true monophonic glide *within a lane*: `SynthVoice` skips the envelope's
+attack stage and smoothly ramps oscillator frequency (over a fixed ~50ms) when a note is legato-linked
+to the one before it in the same lane, rather than hard-retriggering. `SynthEngine` holds a small pool
+of 16 `SynthVoice`s and gives each currently-sounding lane one of them for as long as that lane keeps
+gliding between notes, freeing it (or, if every voice is busy, stealing the least-recently-triggered
+one) when the lane ends - this is what lets several lanes glide independently at once, i.e. a chord
+where each note can have its own melodic movement. For MIDI-out and file export, legato is represented
+using the standard mono-legato convention (new note-on emitted just before the old note-off), which
 legato-aware synths read as a glide and everything else just reads as a clean, gapless handover.
 
 ### A documented thread-safety trade-off
@@ -197,13 +242,17 @@ or MIDI-routing settings if you want to send DrawSynth's output to another instr
 export (Export MIDI... button) works everywhere regardless of host MIDI-routing support, since it's
 just a normal file.
 
-## Deferred (kept out of this v1 pass on purpose)
+## Deferred (kept out of this pass on purpose)
 
-- **Multi-voice colors.** The data model is already color-ready - `StrokePoint`/`Stroke`/`NoteEvent`
-  all carry a `colorIndex` (always `0` here), and `SynthEngine` already tags outgoing MIDI channel as
-  `colorIndex + 1`. Adding it means: a color picker in the UI, `SynthEngine` owning one `SynthVoice`
-  per color instead of one, and `NoteTimelineBuilder`'s composited-cell array keying on `(cell, color)`
-  instead of just `cell` so different colors don't paint over each other.
+- **Distinct timbres per color.** Chords work today (see the Changelog) - what's still deferred is
+  giving each color its *own sound* (color 1 = lead synth, color 2 = pad, as in the original spec).
+  The data model is already color-ready for this - `StrokePoint`/`Stroke`/`NoteEvent` all carry a
+  `colorIndex` (always `0` today), and `SynthEngine` already tags outgoing MIDI channel as
+  `colorIndex + 1`. Adding it means: a color picker in the UI, and `SynthEngine`'s voice pool tracking
+  oscillator/ADSR settings per color instead of one shared set for every voice.
+- **Sub-segment erase.** The eraser removes a whole stroke, not just the part under the cursor.
+  Partial erase would mean splitting a `Stroke`'s point list into two remaining strokes at the erased
+  region - a reasonable follow-up, left out here to keep the change reviewable in one pass.
 - **WAV export.** Not implemented, but the architecture note above is what makes it "trivial" when it
   is: repeatedly call `SynthEngine::renderBlock` against a `NoteTimeline` into an offline buffer, then
   write it with `juce::WavAudioFormat`.

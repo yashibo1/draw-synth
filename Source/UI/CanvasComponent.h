@@ -22,8 +22,12 @@ namespace drawsynth
         void mouseDrag (const juce::MouseEvent&) override;
         void mouseUp (const juce::MouseEvent&) override;
 
+        void setEraseMode (bool shouldErase);
+        bool isEraseMode() const noexcept { return eraseMode; }
+
     private:
         void timerCallback() override;
+        void eraseAt (juce::Point<int> pixelPos);
 
         double xToBeats (int x) const;
         float yToNormalized (int y) const;
@@ -31,6 +35,7 @@ namespace drawsynth
         static float pressureFromEvent (const juce::MouseEvent& e);
 
         DrawSynthAudioProcessor& processorRef;
+        bool eraseMode = false;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CanvasComponent)
     };
