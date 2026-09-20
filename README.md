@@ -16,15 +16,37 @@ and CLAP were all built from this exact source in a clean Linux container (JUCE 
 VST3 exports the correct `GetPluginFactory`/`ModuleEntry`/`ModuleExit` symbols and reports itself as
 an Instrument/Synth, and the CLAP binary exports `clap_entry`. The pure music-logic core (scale
 quantization, stroke-to-note-timeline conversion, including the chord/lane behaviour) has an
-independent test suite that passes 32/32 checks with zero JUCE dependency. What hasn't been checked:
+independent test suite that passes 40/40 checks with zero JUCE dependency. What hasn't been checked:
 actually loading the plugin in a DAW and listening to it (no audio device / GUI in the build
 environment), and Windows/macOS builds - see "Building the Windows installer" below for exactly what
 is and isn't verified about `DrawSynth-Setup.exe`.
 
 ## Changelog
 
-**Fast-stroke note detection, drag-to-DAW export** (this pass):
-- **Fixed: steep/fast strokes losing notes.** `NoteTimelineBuilder` used to sample one Y value per
+**Fixed: self-crossing strokes producing a wall of notes** (this pass):
+- The previous fix (below) processed a stroke's points sorted by X position, which works for a simple
+  left-to-right line but breaks badly for anything that crosses back over itself - a loop, a circle,
+  a "go back and fix this bit" scribble. Sorting by X interleaves points from physically distant parts
+  of the path that happen to share an X value, so the pitch-crossing detector read that scramble as a
+  chaotic zigzag through nearly the whole pitch range, repeated across the whole shape - the wall of
+  notes filling an entire drawn oval.
+- Fixed by processing each stroke in the order it was actually drawn (not sorted by time), painting
+  onto a fine internal grid (480 divisions per beat - well beyond the previous fix's resolution needs)
+  so a later-drawn part of a self-crossing gesture correctly overwrites an earlier part at the same
+  time position, the same "later ink wins" principle already used between separate overlapping
+  strokes, just applied within one stroke's own self-overlaps. A traced circle now resolves to a clean
+  rise-then-fall melodic arc (whichever half of the loop was drawn second), not chaos.
+- This also surfaced and fixed a related bug: snapping every note boundary to the nearest Quantize
+  grid line could cascade into a string of near-zero-length notes when several raw boundaries from a
+  fast or complex gesture landed close together under a coarse grid setting. Snapping is now only
+  applied when a boundary already sits close to a grid line *and* has room on both sides - ordinary
+  slow drawing still snaps cleanly, but a dense run of notes just keeps its own correctly-ordered
+  timing instead of being forced toward a grid line that has no room for it.
+- Added three regression tests for this: a self-crossing stroke, a messy multi-reversal gesture under
+  the coarsest grid setting, and a direct check that no note ever comes out with near-zero duration.
+
+**Fixed: fast/steep strokes losing notes** (previous pass):
+- `NoteTimelineBuilder` used to sample one Y value per
   quantize-grid cell, so a fast, near-vertical drag (a lot of pitch change packed into very little
   time) could have its entire pitch sweep collapse into a single note - exactly the "drawing down
   does one note instead of multiple" bug. It's rewritten to walk the stroke's own recorded points

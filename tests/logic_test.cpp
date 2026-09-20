@@ -271,6 +271,92 @@ int main()
         expect (allWithinGrabbedWindow, "the fast run's notes stay close to where it was actually drawn, not smeared elsewhere");
     }
 
+    section ("NoteTimelineBuilder: a self-crossing stroke lets the later-drawn part win, not a sort-order scramble");
+    {
+        ScaleQuantizer q;
+        q.setRoot (0);
+        q.setScale (ScaleType::Major);
+        q.setOctaveRange (2); // 15 steps - plenty of room to tell "near top" and "near bottom" apart
+
+        StrokeModel model;
+        // Draw left-to-right along the top (high pitch)...
+        model.beginStroke (0.0, 0.1f, 0.8f, 0);
+        model.continueStroke (2.0, 0.1f, 0.8f);
+        // ...then, in the SAME stroke, sweep back from right to left down to
+        // the bottom (low pitch) - crossing back over the same time range
+        // the first leg already covered, like tracing a loop.
+        model.continueStroke (0.0, 0.9f, 0.8f);
+        model.endStroke();
+
+        const auto timeline = NoteTimelineBuilder::build (model.getStrokes(), q, 4.0, 1);
+
+        expect (! timeline.events.empty(), "a self-crossing stroke still produces notes");
+
+        const NoteEvent* noteAtStart = nullptr;
+        for (const auto& ev : timeline.events)
+        {
+            if (ev.startBeat <= 0.05 && ev.endBeat > 0.0)
+            {
+                noteAtStart = &ev;
+                break;
+            }
+        }
+
+        expect (noteAtStart != nullptr, "there is a note covering the very start of the stroke");
+        if (noteAtStart != nullptr)
+        {
+            const int earlierPitch = q.quantizeNormalizedYToMidiNote (0.1f); // what the first (overwritten) leg alone implied
+            const int laterPitch = q.quantizeNormalizedYToMidiNote (0.9f);   // what the second (later-drawn) leg implied
+            expect (noteAtStart->midiNote != earlierPitch,
+                    "the note at the start is NOT the pitch the first-drawn leg alone would give");
+            expect (noteAtStart->midiNote == laterPitch,
+                    "the note at the start matches the leg drawn later, i.e. later ink wins");
+        }
+
+        // The second leg starts at the same point (t=2, y=0.1) the first leg
+        // ends at, so the very last note in this single-lane timeline (the
+        // one actually reaching t=2) should agree with both legs there - a
+        // useful check that the handoff between legs isn't corrupted.
+        expect (! timeline.events.empty(), "there is at least one note to check at the shared boundary");
+        if (! timeline.events.empty())
+        {
+            const auto& lastNote = timeline.events.back();
+            const int sharedPitch = q.quantizeNormalizedYToMidiNote (0.1f);
+            expect (std::abs (lastNote.endBeat - 2.0) < 0.01, "the final note in this stroke ends right at the shared boundary point");
+            expect (lastNote.midiNote == sharedPitch, "the final note matches what both legs agree on at the shared boundary");
+        }
+    }
+
+    section ("NoteTimelineBuilder: a coarse grid never produces a cascade of degenerate near-zero-length notes");
+    {
+        ScaleQuantizer q;
+        q.setRoot (0);
+        q.setScale (ScaleType::Major);
+        q.setOctaveRange (3); // 22 steps - lots of pitch content to pack into a short span
+
+        StrokeModel model;
+        // A deliberately messy multi-reversal gesture (like tracing a rough
+        // loop by hand) under the coarsest possible Quantize setting (1/beat),
+        // which is exactly the combination that used to cascade into a string
+        // of near-instantaneous notes right after each successful grid snap.
+        model.beginStroke (0.00, 0.95f, 0.8f, 0);
+        model.continueStroke (1.90, 0.05f, 0.8f);
+        model.continueStroke (0.10, 0.85f, 0.8f);
+        model.continueStroke (1.95, 0.15f, 0.8f);
+        model.continueStroke (0.05, 0.75f, 0.8f);
+        model.endStroke();
+
+        const auto timeline = NoteTimelineBuilder::build (model.getStrokes(), q, 4.0, 1);
+
+        constexpr double kSaneMinimumDuration = 1.0 / 480.0; // one fine-grid cell; anything shorter is a placement bug
+        bool noDegenerateNotes = true;
+        for (const auto& ev : timeline.events)
+            if (ev.endBeat - ev.startBeat < kSaneMinimumDuration - 1.0e-9)
+                noDegenerateNotes = false;
+
+        expect (noDegenerateNotes, "even a messy, reversal-heavy gesture under a coarse grid produces no near-zero-length notes");
+    }
+
     std::printf ("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
