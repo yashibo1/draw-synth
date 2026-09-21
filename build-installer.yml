@@ -1,0 +1,51 @@
+name: Build Windows Installer
+
+# Produces a real DrawSynth-Setup.exe on a genuine Windows + MSVC runner -
+# this is the piece that can't be done from a Linux machine (JUCE explicitly
+# does not support building under MinGW; see README.md for why). Requires no
+# self-hosted runner and no payment: GitHub provides windows-latest runners
+# free for public repositories (and with a monthly free quota for private
+# ones), with Visual Studio, CMake, and Chocolatey already installed.
+#
+# To use: push this repository to GitHub, then either wait for a push to
+# main, or run this workflow manually from the Actions tab ("Run workflow").
+# When it finishes, open the run and download the "DrawSynth-Setup" artifact
+# from the Artifacts section at the bottom of the page.
+
+"on":
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Source/**'
+      - 'CMakeLists.txt'
+      - 'installer/**'
+      - '.github/workflows/build-installer.yml'
+
+jobs:
+  build-windows-installer:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out DrawSynth
+        uses: actions/checkout@v4
+
+      - name: Configure (CMake + MSVC, x64)
+        run: cmake -B build -A x64
+
+      - name: Build VST3 + Standalone (Release)
+        run: cmake --build build --config Release --target DrawSynth_VST3 DrawSynth_Standalone --parallel
+
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+
+      - name: Build the installer
+        shell: cmd
+        run: '"C:\Program Files (x86)\NSIS\makensis.exe" installer\DrawSynth-Setup.nsi'
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DrawSynth-Setup
+          path: installer/DrawSynth-Setup.exe
+          if-no-files-found: error

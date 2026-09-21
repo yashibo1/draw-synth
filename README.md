@@ -16,14 +16,29 @@ and CLAP were all built from this exact source in a clean Linux container (JUCE 
 VST3 exports the correct `GetPluginFactory`/`ModuleEntry`/`ModuleExit` symbols and reports itself as
 an Instrument/Synth, and the CLAP binary exports `clap_entry`. The pure music-logic core (scale
 quantization, stroke-to-note-timeline conversion, including the chord/lane behaviour) has an
-independent test suite that passes 40/40 checks with zero JUCE dependency. What hasn't been checked:
+independent test suite that passes 44/44 checks with zero JUCE dependency. What hasn't been checked:
 actually loading the plugin in a DAW and listening to it (no audio device / GUI in the build
 environment), and Windows/macOS builds - see "Building the Windows installer" below for exactly what
 is and isn't verified about `DrawSynth-Setup.exe`.
 
 ## Changelog
 
-**Fixed: self-crossing strokes producing a wall of notes** (this pass):
+**Guaranteed coverage: every drawn point now produces a note, no exceptions** (this pass):
+- Even after the self-crossing fix above, a shape with several overlapping legs (a loop that goes top
+  → down the left → across the bottom → back up a wide arc on the right, closing near the top again)
+  could still end up with a stretch of gray line and no note. The "later ink wins" overwrite logic is
+  built from a chain of segments that each share an endpoint with the next, which should mathematically
+  leave no gap on its own - but "should" isn't a guarantee, and a drawing instrument has exactly one
+  promise to keep: wherever the pen was, there's a note.
+- So that's now enforced directly rather than trusted to hold implicitly. After painting a stroke,
+  `NoteTimelineBuilder` runs one more pass over its own drawn time range and fills any fine grid cell
+  that's still unpainted from its nearest painted neighbour - a small, cheap, unconditional guarantee
+  that closes the door on this whole class of bug regardless of exactly which combination of legs,
+  directions, and overlaps produced the gap.
+- Added a regression test using the same three-leg topology (top, left descent, bottom, wide arc back
+  up the right) that was losing notes, checking specifically for zero gaps across the whole shape.
+
+**Fixed: self-crossing strokes producing a wall of notes** (previous pass):
 - The previous fix (below) processed a stroke's points sorted by X position, which works for a simple
   left-to-right line but breaks badly for anything that crosses back over itself - a loop, a circle,
   a "go back and fix this bit" scribble. Sorting by X interleaves points from physically distant parts
