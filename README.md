@@ -23,7 +23,15 @@ is and isn't verified about `DrawSynth-Setup.exe`.
 
 ## Changelog
 
-**Guaranteed coverage: every drawn point now produces a note, no exceptions** (this pass):
+**Build tag for verifying which version is actually running** (this pass):
+- Added a small, deliberately visible label in the transport bar (bottom-right, orange text) showing
+  a build identifier from `Source/BuildInfo.h`, bumped by hand with each change. Purpose: a host can
+  keep an old copy of a plugin DLL loaded in memory even after the file on disk has been replaced, so
+  when a fix doesn't seem to take effect, checking this tag against what's expected is the fastest way
+  to tell "the fix isn't working" apart from "the old build is still what's actually loaded" - the
+  latter needs a full host restart (and sometimes a plugin rescan), not more code changes.
+
+**Guaranteed coverage: every drawn point now produces a note, no exceptions** (previous pass):
 - Even after the self-crossing fix above, a shape with several overlapping legs (a loop that goes top
   → down the left → across the bottom → back up a wide arc on the right, closing near the top again)
   could still end up with a stretch of gray line and no note. The "later ink wins" overwrite logic is
@@ -235,6 +243,10 @@ nothing needs to be redrawn:
 - **Export MIDI...** - writes the current pattern, one loop cycle, to a `.mid` file.
 - **Drag into DAW** - press and drag this straight onto your DAW's timeline or piano roll to drop the
   current pattern in as MIDI, with no save dialog and nothing to download first.
+- Bottom-right corner: a small orange **build tag** - if a fix doesn't seem to be taking effect, check
+  this against `Source/BuildInfo.h` in whatever you last built. A mismatch means the host is still
+  running an old copy of the plugin from before you rebuilt/reinstalled - restart the host (a plugin
+  rescan may also be needed) rather than assuming the fix itself didn't work.
 
 There's no per-color timbre picker in this build (chords work regardless - see the Changelog - but
 every simultaneous voice shares the same oscillator/ADSR sound). See "Deferred" below.

@@ -1,5 +1,6 @@
 #include "TransportBar.h"
 #include "../Params.h"
+#include "../BuildInfo.h"
 
 namespace drawsynth
 {
@@ -39,6 +40,13 @@ namespace drawsynth
         statusLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
         statusLabel.setText ("Draw on the canvas, then hit Play", juce::dontSendNotification);
         addAndMakeVisible (statusLabel);
+
+        buildLabel.setJustificationType (juce::Justification::centredRight);
+        buildLabel.setColour (juce::Label::textColourId, juce::Colour (0xffffcc66));
+        buildLabel.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+        buildLabel.setText (kBuildTag, juce::dontSendNotification);
+        buildLabel.setTooltip ("Confirms which build is actually running - check this matches what you expect if a fix doesn't seem to be taking effect.");
+        addAndMakeVisible (buildLabel);
     }
 
     void TransportBar::exportMidi()
@@ -89,6 +97,7 @@ namespace drawsynth
         area.removeFromLeft (8);
         dragExportButton.setBounds (area.removeFromLeft (110));
         area.removeFromLeft (12);
+        buildLabel.setBounds (area.removeFromRight (130));
         statusLabel.setBounds (area);
     }
 }

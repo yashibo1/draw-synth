@@ -32,6 +32,7 @@ namespace drawsynth
         juce::TextButton exportMidiButton { "Export MIDI..." };
         DragExportButton dragExportButton;
         juce::Label statusLabel;
+        juce::Label buildLabel;
 
         std::unique_ptr<ButtonAttachment> playAttachment, recordAttachment;
         std::unique_ptr<juce::FileChooser> fileChooser;
